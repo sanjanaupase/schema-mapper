@@ -1,0 +1,1 @@
+{"title": "TargetEmployee", "type": "object", "properties": {"name": {"type": "string"}, "department": {"type": "string"}, "salary": {"type": "number"}}, "required": ["name", "department", "salary"]}

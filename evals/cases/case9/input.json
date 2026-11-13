@@ -1,0 +1,5 @@
+[
+  {"sku": "A-100", "qty": "3", "unit_price": "10.00", "line_total": "35.00"},
+  {"sku": "A-101", "qty": "2", "unit_price": "7.50", "line_total": "15.00"},
+  {"sku": "A-102", "qty": "4", "unit_price": "2.25", "line_total": "9.00"}
+]

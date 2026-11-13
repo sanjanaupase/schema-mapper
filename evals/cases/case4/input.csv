@@ -1,0 +1,4 @@
+order_id,order_date,customer,amount
+1001,15/04/2026,Acme Corp,
+1002,2026-04-05,Beta LLC,1200
+1003,4 Mar 2026,,500

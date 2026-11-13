@@ -1,0 +1,5 @@
+[
+  {"name": "Ana Lopez", "status": "active", "age": 29, "member_code": "MB-2041"},
+  {"name": "Ravi Kumar", "status": "inactive", "age": 41, "member_code": "MB-1187"},
+  {"name": "Lee Chen", "status": "active", "age": 35, "member_code": "MB-0932"}
+]

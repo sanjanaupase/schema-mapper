@@ -1,0 +1,4 @@
+[
+  {"first_name": "John", "last_name": "Smith", "amount": 1234.50, "country": "Germany"},
+  {"first_name": "Jane", "last_name": "Doe", "amount": 99.00, "country": "France"}
+]

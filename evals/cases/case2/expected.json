@@ -1,0 +1,4 @@
+[
+  {"title": "Laptop Pro", "price": 1299.99, "available": true},
+  {"title": "Wireless Mouse", "price": 25.5, "available": false}
+]

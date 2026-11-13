@@ -1,0 +1,5 @@
+[
+  {"invoice_id": "INV-101", "region": "EU", "gross_amount": 1190.00, "vat_applied": true},
+  {"invoice_id": "INV-102", "region": "APAC", "gross_amount": 250.50, "vat_applied": false},
+  {"invoice_id": "INV-103", "region": "EU", "gross_amount": 96.00, "vat_applied": true}
+]

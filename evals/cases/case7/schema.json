@@ -1,0 +1,1 @@
+{"title": "TargetMember", "type": "object", "properties": {"name": {"type": "string"}, "status": {"type": "string", "enum": ["active", "inactive"]}, "age": {"type": "integer"}, "member_code": {"type": "string", "pattern": "^MB-[0-9]{4}$"}}, "required": ["name", "status", "age", "member_code"]}

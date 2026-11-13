@@ -1,0 +1,3 @@
+emp_name,dept_name,salary_str
+"Alice Johnson", "Engineering", "$95,000"
+"Bob Brown", "Marketing", "82000.00"

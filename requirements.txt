@@ -1,0 +1,4 @@
+google-genai==3.3.0
+pydantic==2.14.3
+jsonschema==4.26.0
+streamlit==1.67.0

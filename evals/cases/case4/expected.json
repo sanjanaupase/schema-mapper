@@ -1,0 +1,5 @@
+[
+  {"order_id": 1001, "order_date": "2026-04-15", "customer": "Acme Corp", "amount": null},
+  {"order_id": 1002, "order_date": "2026-04-05", "customer": "Beta LLC", "amount": 1200},
+  {"order_id": 1003, "order_date": "2026-03-04", "customer": null, "amount": 500}
+]

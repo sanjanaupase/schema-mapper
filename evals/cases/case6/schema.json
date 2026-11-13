@@ -1,0 +1,1 @@
+{"title": "TargetItem", "type": "object", "properties": {"item": {"type": "string"}, "weight_g": {"type": "number"}}, "required": ["item", "weight_g"]}

@@ -1,0 +1,1 @@
+{"title": "TargetOrder", "type": "object", "properties": {"order_id": {"type": "integer"}, "order_date": {"type": "string"}, "customer": {"type": ["string", "null"]}, "amount": {"type": ["number", "null"]}}, "required": ["order_id", "order_date"]}

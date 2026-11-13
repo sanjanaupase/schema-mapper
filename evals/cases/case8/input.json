@@ -1,0 +1,5 @@
+[
+  {"invoice_no": "INV-101", "country": "DE", "net_amount": "1000.00", "vat_exempt": "false"},
+  {"invoice_no": "INV-102", "country": "IN", "net_amount": "250.50", "vat_exempt": "true"},
+  {"invoice_no": "INV-103", "country": "FR", "net_amount": "80", "vat_exempt": "no"}
+]

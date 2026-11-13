@@ -1,0 +1,5 @@
+[
+  {"sku": "A-100", "quantity": 3, "line_total": 30.00, "flagged": true},
+  {"sku": "A-101", "quantity": 2, "line_total": 15.00, "flagged": false},
+  {"sku": "A-102", "quantity": 4, "line_total": 9.00, "flagged": false}
+]
