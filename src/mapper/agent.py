@@ -1,151 +1,209 @@
 import json
 import os
-import re
+import random
 import time
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, TypedDict
 
-from google import genai
-from google.genai import types
+from langchain_google_genai import ChatGoogleGenerativeAI
 from jsonschema import Draft202012Validator
+from langchain_core.prompts import PromptTemplate
+from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
+from .limits import check_and_count
 from .redact import redact_data
 from .sandbox import BaseSandbox, LocalSubprocessSandbox
 from .schemas import CodeResponse, Metrics, MappingResult
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "500"))
+
+PROMPT = PromptTemplate.from_template(
+    "Write a Python function `transform(row: dict) -> dict` that maps input rows to the target schema. "
+    "Use ONLY the standard library. Follow every field description in the schema exactly, especially format conversions. Never invent values: if a target field has no matching source column, "
+    "raise ValueError(\"missing source for <field>\") instead of returning a default like 0 or \"\".\n\n"
+    "Target schema:\n{schema}\n\nSample input rows (redacted):\n{sample}\n\n{examples}"
+)
+
+
+class State(TypedDict, total=False):
+    attempt: int
+    code: Any
+    feedback: str
+    sandbox_results: List[Dict[str, Any]]
+    sandbox_errors: List[Dict[str, Any]]
+    records: List[Dict[str, Any]]
+    errors: List[Dict[str, Any]]
+    in_tok: int
+    out_tok: int
+
+
+def _check_row(row, validator, is_pydantic):
+    if is_pydantic:
+        return validator(**row).model_dump()
+    validator.validate(row)
+    return row
+
+
+class _Reply:
+    """Gives LangChain's structured output the .text and .usage_metadata shape the graph expects."""
+
+    def __init__(self, parsed, raw):
+        self.text = parsed.model_dump_json() if parsed is not None else ""
+        meta = getattr(raw, "usage_metadata", None) or {}
+        self.usage_metadata = type("Usage", (), {
+            "prompt_token_count": int(meta.get("input_tokens", 0) or 0),
+            "candidates_token_count": int(meta.get("output_tokens", 0) or 0),
+        })()
 
 
 class SchemaMapperAgent:
-    def __init__(self, sandbox: BaseSandbox = None, client: genai.Client = None):
+    def __init__(self, sandbox: BaseSandbox = None, client=None):
         self.sandbox = sandbox or LocalSubprocessSandbox()
-        self.client = client or genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+        self.metered = client is None
+        self.client = client
 
-    def map_data(
-        self,
-        rows: List[Dict[str, Any]],
-        target_schema: Union[type, Dict[str, Any]],
-        max_attempts: int = 3,
-    ) -> MappingResult:
+    def map_data(self, rows, target_schema, max_attempts=3, examples=""):
         start = time.time()
-        in_tok = out_tok = 0
-        attempts = 0
-        code = ""
-
-        if isinstance(target_schema, type) and issubclass(target_schema, BaseModel):
-            schema_desc = target_schema.model_json_schema()
-            validator = target_schema
+        is_pydantic = isinstance(target_schema, type) and issubclass(target_schema, BaseModel)
+        if is_pydantic:
+            schema_desc, validator = target_schema.model_json_schema(), target_schema
         else:
-            schema_desc = target_schema
-            validator = Draft202012Validator(target_schema)
-
-        sample = redact_data(rows[:5])
-        base_prompt = (
-            "Write a Python function `transform(row: dict) -> dict` that maps input rows "
-            "to the target schema. Use ONLY the standard library. "
-            "Never invent values: if a target field has no matching source column, "
-            "raise ValueError(\"missing source for <field>\") instead of returning a default like 0 or \"\".\n\n"
-            f"Target schema:\n{json.dumps(schema_desc, indent=2)}\n\n"
-            f"Sample input rows (redacted):\n{json.dumps(sample, indent=2)}"
+            schema_desc, validator = target_schema, Draft202012Validator(target_schema)
+        base = PROMPT.format(
+            schema=json.dumps(schema_desc, indent=2),
+            sample=json.dumps(redact_data(rows[:5]), indent=2),
+            examples=examples,
         )
+        ctx = {"rows": rows, "base": base, "validator": validator, "is_pydantic": is_pydantic, "max": max_attempts}
 
-        feedback = ""
-        for attempt in range(1, max_attempts + 1):
-            attempts = attempt
-            prompt = base_prompt
-            if feedback:
-                prompt += f"\n\nPrevious attempt failed. Fix the code.\n{feedback}"
+        def decide(state):
+            return "generate" if state.get("attempt", 0) < ctx["max"] else "finish"
 
-            print(f"    [attempt {attempt}/{max_attempts}] calling {MODEL} ...", flush=True)
-            response = self._call_gemini(prompt)
-            usage = getattr(response, "usage_metadata", None)
+        def generate(state):
+            attempt = state.get("attempt", 0) + 1
+            prompt = ctx["base"]
+            if state.get("feedback"):
+                prompt += f"\n\nPrevious attempt failed. Fix the code.\n{state['feedback']}"
+            resp = self._call_gemini(prompt)
+            in_tok, out_tok = state.get("in_tok", 0), state.get("out_tok", 0)
+            usage = getattr(resp, "usage_metadata", None)
             if usage:
                 in_tok += getattr(usage, "prompt_token_count", 0) or 0
                 out_tok += getattr(usage, "candidates_token_count", 0) or 0
-
             try:
-                code = CodeResponse(**json.loads(response.text)).python_code
+                code = CodeResponse(**json.loads(resp.text)).python_code
             except Exception as e:
-                feedback = redact_data(f"Could not parse model output: {e}")
-                continue
+                return {"attempt": attempt, "code": None, "in_tok": in_tok, "out_tok": out_tok,
+                        "feedback": redact_data(f"Could not parse model output: {e}"),
+                        "records": [], "errors": [{"index": -1, "error": "Model output could not be parsed"}]}
+            return {"attempt": attempt, "code": code, "in_tok": in_tok, "out_tok": out_tok, "feedback": ""}
 
-            print(f"    [attempt {attempt}] got code, running sandbox", flush=True)
-            results, sandbox_errors = self.sandbox.run_transform(code, rows)
-            if any(e.get("index") == -1 for e in sandbox_errors):
-                feedback = redact_data(f"Sandbox error: {json.dumps(sandbox_errors)}")
-                continue
+        def execute(state):
+            code = state["code"]
+            results, errs = [], []
+            for offset in range(0, len(ctx["rows"]), CHUNK_SIZE):
+                chunk = ctx["rows"][offset:offset + CHUNK_SIZE]
+                r, e = self.sandbox.run_transform(code, chunk)
+                for x in r:
+                    x["index"] += offset
+                for x in e:
+                    if x.get("index", -1) != -1:
+                        x["index"] += offset
+                results += r
+                errs += e
+                if any(x.get("index") == -1 for x in e):
+                    break
+            if any(x.get("index") == -1 for x in errs):
+                return {"sandbox_results": [], "sandbox_errors": errs, "records": [], "errors": errs,
+                        "feedback": redact_data(f"Sandbox error: {json.dumps(errs)}")}
+            return {"sandbox_results": results, "sandbox_errors": errs}
 
-            records, errors = self._validate(results, validator)
-            errors = sandbox_errors + errors
-            if not errors:
-                return self._result(records, [], code, attempts, start, in_tok, out_tok)
+        def validate(state):
+            records, errors = [], list(state.get("sandbox_errors", []))
+            for res in state.get("sandbox_results", []):
+                try:
+                    records.append(_check_row(res["row"], ctx["validator"], ctx["is_pydantic"]))
+                except Exception as e:
+                    errors.append({"index": res["index"], "error": redact_data(str(e))})
+            update = {"records": records, "errors": errors}
+            if errors:
+                update["feedback"] = redact_data(
+                    f"Validation or execution errors on attempt {state.get('attempt')}:\n"
+                    f"{json.dumps(errors[:10], indent=2)}")
+            return update
 
-            feedback = redact_data(
-                f"Validation errors on attempt {attempt}:\n{json.dumps(errors[:10], indent=2)}"
-            )
+        def finish(state):
+            return {}
 
-        records, errors = [], []
-        if code:
-            results, sandbox_errors = self.sandbox.run_transform(code, rows)
-            records, errors = self._validate(results, validator)
-            errors = sandbox_errors + errors
-        else:
-            errors = [{"index": -1, "error": "No valid code generated"}]
-        return self._result(records, errors, code, attempts, start, in_tok, out_tok)
+        def after_generate(state):
+            return "execute" if state.get("code") else decide(state)
 
-    @staticmethod
-    def _validate(results, validator):
-        records, errors = [], []
-        for res in results:
-            try:
-                if isinstance(validator, Draft202012Validator):
-                    validator.validate(res["row"])
-                    records.append(res["row"])
-                else:
-                    records.append(validator(**res["row"]).model_dump())
-            except Exception as e:
-                errors.append({"index": res["index"], "error": redact_data(str(e))})
-        return records, errors
+        def after_execute(state):
+            if any(e.get("index") == -1 for e in state.get("sandbox_errors", [])):
+                return decide(state)
+            return "validate"
 
-    @staticmethod
-    def _result(records, errors, code, attempts, start, in_tok, out_tok) -> MappingResult:
+        def after_validate(state):
+            return decide(state) if state.get("errors") else END
+
+        g = StateGraph(State)
+        g.add_node("generate", generate)
+        g.add_node("execute", execute)
+        g.add_node("validate", validate)
+        g.add_node("finish", finish)
+        g.add_edge(START, "generate")
+        g.add_conditional_edges("generate", after_generate,
+                                {"execute": "execute", "generate": "generate", "finish": "finish"})
+        g.add_conditional_edges("execute", after_execute,
+                                {"validate": "validate", "generate": "generate", "finish": "finish"})
+        g.add_conditional_edges("validate", after_validate,
+                                {"generate": "generate", "finish": "finish", END: END})
+        g.add_edge("finish", END)
+
+        final = g.compile().invoke({"attempt": 0, "feedback": "", "in_tok": 0, "out_tok": 0,
+                                    "records": [], "errors": [], "code": None})
+
+        code = final.get("code") or ""
+        records = final.get("records") or []
+        errors = final.get("errors") or []
+        if not code:
+            records, errors = [], [{"index": -1, "error": "No valid code generated"}]
         return MappingResult(
             records=records,
             errors=errors,
             generated_code=code,
             metrics=Metrics(
-                attempts=attempts,
+                attempts=final.get("attempt", 0),
                 latency_ms=(time.time() - start) * 1000,
-                input_tokens=in_tok,
-                output_tokens=out_tok,
+                input_tokens=final.get("in_tok", 0),
+                output_tokens=final.get("out_tok", 0),
             ),
         )
 
     def _call_gemini(self, prompt: str):
-        import random
-        models = [MODEL, "gemini-3.5-flash", "gemini-2.5-flash-lite"]
-        last_err = None
+        models = list(dict.fromkeys([MODEL, "gemini-3.5-flash-lite", "gemini-2.5-flash-lite"]))
+        last = None
         for model in models:
             delay = 3.0
             for _ in range(6):
+                if self.metered:
+                    check_and_count()
                 try:
-                    return self.client.models.generate_content(
+                    llm = self.client or ChatGoogleGenerativeAI(
                         model=model,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema=CodeResponse,
-                            temperature=0.1,
-                        ),
+                        google_api_key=os.environ.get("GEMINI_API_KEY"),
+                        max_retries=0,
                     )
+                    out = llm.with_structured_output(CodeResponse, include_raw=True).invoke(prompt)
+                    return _Reply(out.get("parsed"), out.get("raw"))
                 except Exception as e:
-                    last_err = e
+                    last = e
                     msg = str(e).upper()
                     if "404" in msg or "NOT_FOUND" in msg:
                         break
-                    transient = any(k in msg for k in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "500", "INTERNAL"))
-                    if not transient:
+                    if not any(k in msg for k in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "500", "INTERNAL")):
                         raise
                     time.sleep(delay + random.uniform(0, 1))
                     delay = min(delay * 2, 60)
-        raise last_err
+        raise last

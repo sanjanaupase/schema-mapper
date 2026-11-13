@@ -1,1 +1,30 @@
-{"title": "TargetOrder", "type": "object", "properties": {"order_id": {"type": "integer"}, "order_date": {"type": "string"}, "customer": {"type": ["string", "null"]}, "amount": {"type": ["number", "null"]}}, "required": ["order_id", "order_date"]}
+{
+  "title": "TargetOrder",
+  "type": "object",
+  "properties": {
+    "order_id": {
+      "type": "integer"
+    },
+    "order_date": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO 8601 date YYYY-MM-DD. Convert every input date (e.g. 15/04/2026, 4 Mar 2026) to this format. Day-first for slash dates."
+    },
+    "customer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "amount": {
+      "type": [
+        "number",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "order_id",
+    "order_date"
+  ]
+}
