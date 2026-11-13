@@ -4,6 +4,8 @@ Turns messy client CSV or JSON into a target schema. Every row is validated, and
 
 **Live demo:** https://ai-schema-mapper.streamlit.app (free tier: the first load can take about 30 seconds)
 
+**Architecture:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): design decisions and tradeoffs.
+
 ## Quick start
 
 Requires Python 3.12 or newer.
